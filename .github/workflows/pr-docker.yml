@@ -347,7 +347,7 @@ jobs:
 
       - name: Grype vulnerability scan
         id: grype_scan
-        uses: anchore/scan-action@v3
+        uses: anchore/scan-action@v7
         continue-on-error: true
         with:
           image: ${{ env.APP_NAME }}:test
