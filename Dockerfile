@@ -14,7 +14,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o sentientd ./cmd
 
 # Runtime stage
-FROM alpine:3.22
+FROM alpine:3.22 AS runtime
 
 # Install ca-certificates for HTTPS
 RUN apk add --no-cache ca-certificates

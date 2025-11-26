@@ -102,7 +102,7 @@ jobs:
         run: |
           # Extract main binary
           docker create --name temp-build ${{ env.APP_NAME }}:build-stage
-          docker cp temp-build:/app/${{ env.APP_NAME }} /tmp/${{ env.APP_NAME }}
+          docker cp temp-build:/build/${{ env.APP_NAME }} /tmp/${{ env.APP_NAME }}
           docker rm temp-build
           
           # Calculate hash
