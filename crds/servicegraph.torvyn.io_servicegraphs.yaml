@@ -1,0 +1,145 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: servicegraphs.torvyn.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+spec:
+  group: torvyn.io
+  names:
+    kind: ServiceGraph
+    listKind: ServiceGraphList
+    plural: servicegraphs
+    singular: servicegraph
+    shortNames:
+      - sg
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: ServiceGraph represents the topology of services and their dependencies
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: ServiceGraphSpec defines the desired state of ServiceGraph
+              properties:
+                nodes:
+                  type: array
+                  description: Nodes represent services, databases, queues, and other components
+                  items:
+                    type: object
+                    required:
+                      - id
+                      - type
+                    properties:
+                      id:
+                        type: string
+                        description: Unique identifier for the node (e.g., "svc:payment-api")
+                        pattern: '^[a-z]+:[a-z0-9-]+$'
+                      type:
+                        type: string
+                        description: Type of node
+                        enum:
+                          - service
+                          - database
+                          - queue
+                          - cache
+                          - external
+                      labels:
+                        type: object
+                        description: Key-value labels for the node
+                        additionalProperties:
+                          type: string
+                      metadata:
+                        type: object
+                        description: Additional metadata
+                        additionalProperties:
+                          type: string
+                edges:
+                  type: array
+                  description: Edges represent dependencies between nodes
+                  items:
+                    type: object
+                    required:
+                      - from
+                      - to
+                      - type
+                    properties:
+                      from:
+                        type: string
+                        description: Source node ID
+                      to:
+                        type: string
+                        description: Target node ID
+                      type:
+                        type: string
+                        description: Type of dependency
+                        enum:
+                          - depends_on
+                          - calls
+                          - publishes_to
+                          - subscribes_to
+                      weight:
+                        type: integer
+                        description: Optional weight for the edge (e.g., request rate)
+                        minimum: 0
+                      labels:
+                        type: object
+                        description: Key-value labels for the edge
+                        additionalProperties:
+                          type: string
+            status:
+              type: object
+              description: ServiceGraphStatus defines the observed state of ServiceGraph
+              properties:
+                lastUpdated:
+                  type: string
+                  format: date-time
+                  description: Timestamp of last update
+                nodeCount:
+                  type: integer
+                  description: Total number of nodes
+                edgeCount:
+                  type: integer
+                  description: Total number of edges
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+      additionalPrinterColumns:
+        - name: Nodes
+          type: integer
+          jsonPath: .status.nodeCount
+        - name: Edges
+          type: integer
+          jsonPath: .status.edgeCount
+        - name: Last Updated
+          type: string
+          jsonPath: .status.lastUpdated
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}

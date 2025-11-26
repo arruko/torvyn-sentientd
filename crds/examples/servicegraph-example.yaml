@@ -1,0 +1,110 @@
+apiVersion: torvyn.io/v1alpha1
+kind: ServiceGraph
+metadata:
+  name: default
+  namespace: sentientd
+spec:
+  nodes:
+    # Services
+    - id: "svc:payment-api"
+      type: service
+      labels:
+        namespace: "payments"
+        deployment: "payment-api"
+        app: "payment-api"
+        tier: "backend"
+
+    - id: "svc:order-service"
+      type: service
+      labels:
+        namespace: "orders"
+        deployment: "order-service"
+        app: "order-service"
+        tier: "backend"
+
+    - id: "svc:notification-service"
+      type: service
+      labels:
+        namespace: "notifications"
+        deployment: "notification-service"
+        app: "notification-service"
+        tier: "backend"
+
+    # Databases
+    - id: "db:payment-db"
+      type: database
+      labels:
+        namespace: "payments"
+        engine: "postgresql"
+        version: "15"
+
+    - id: "db:order-db"
+      type: database
+      labels:
+        namespace: "orders"
+        engine: "postgresql"
+        version: "15"
+
+    # Queues
+    - id: "queue:order-events"
+      type: queue
+      labels:
+        namespace: "messaging"
+        broker: "kafka"
+        topic: "order-events"
+
+    # Cache
+    - id: "cache:payment-cache"
+      type: cache
+      labels:
+        namespace: "payments"
+        engine: "redis"
+
+  edges:
+    # payment-api dependencies
+    - from: "svc:payment-api"
+      to: "db:payment-db"
+      type: "depends_on"
+      weight: 100
+      labels:
+        protocol: "tcp"
+        port: "5432"
+
+    - from: "svc:payment-api"
+      to: "cache:payment-cache"
+      type: "depends_on"
+      weight: 50
+      labels:
+        protocol: "tcp"
+        port: "6379"
+
+    # order-service dependencies
+    - from: "svc:order-service"
+      to: "db:order-db"
+      type: "depends_on"
+      weight: 100
+
+    - from: "svc:order-service"
+      to: "queue:order-events"
+      type: "publishes_to"
+      weight: 20
+
+    # Service-to-service calls
+    - from: "svc:order-service"
+      to: "svc:payment-api"
+      type: "calls"
+      weight: 30
+      labels:
+        protocol: "http"
+        port: "8080"
+
+    - from: "svc:order-service"
+      to: "svc:notification-service"
+      type: "calls"
+      weight: 10
+
+    # notification-service dependencies
+    - from: "svc:notification-service"
+      to: "queue:order-events"
+      type: "subscribes_to"
+      weight: 20

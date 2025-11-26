@@ -1,0 +1,40 @@
+{
+  "env": {
+    "DISABLE_TELEMETRY": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Read(./**)",
+      "Write(./**)"
+    ],
+
+    "deny": [
+      "Bash(*)",
+      "WebFetch",
+      "WebSearch",
+
+      "Read(~/.aws)",
+
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Read(./config/credentials.json)",
+
+      "Write(./.env)",
+      "Write(./.env.*)",
+      "Write(./secrets/**)"
+    ],
+
+    "additionalDirectories": [],
+
+    "defaultMode": "acceptEdits",
+
+    "disableBypassPermissionsMode": "disable"
+  },
+
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": false,
+    "allowUnsandboxedCommands": false
+  }
+}

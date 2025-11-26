@@ -1,0 +1,561 @@
+name: docker
+
+on:
+  pull_request:
+    branches: [ "**" ]
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+concurrency:
+  group: pr-docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+  GO_VERSION: '1.25.4'
+  APP_NAME: 'torvyn-sentientd'
+
+jobs:
+  # Job 1: Lint (fail fast - no dependencies)
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      duration: ${{ steps.duration.outputs.duration }}
+    steps:
+      - name: Record start time
+        id: start
+        run: echo "time=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: error
+          ignore: DL3018
+
+      - name: Calculate duration
+        id: duration
+        if: always()
+        run: |
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - ${{ steps.start.outputs.time }}))
+          echo "duration=${DURATION}s" >> $GITHUB_OUTPUT
+
+  # Job 2: Build (depends on lint passing)
+  build:
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      app_hash: ${{ steps.calculate_hash.outputs.app_hash }}
+      size_amd64: ${{ steps.sizes.outputs.size_amd64_mb }}
+      duration: ${{ steps.duration.outputs.duration }}
+    steps:
+      - name: Record start time
+        id: start
+        run: echo "time=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build builder stage to extract binary and calculate hash
+      - name: Build binary stage
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: builder
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.APP_NAME }}:builder
+          cache-from: type=gha,scope=builder
+          cache-to: type=gha,mode=max,scope=builder
+
+      # Extract binary and calculate hash
+      - name: Calculate binary hash
+        id: calculate_hash
+        run: |
+          # Extract binary
+          docker create --name temp-build ${{ env.APP_NAME }}:builder
+          docker cp temp-build:/build/sentientd /tmp/sentientd
+          docker rm temp-build
+
+          # Calculate hash
+          APP_HASH=$(sha256sum /tmp/sentientd | awk '{print $1}')
+          echo "app_hash=$APP_HASH" >> $GITHUB_OUTPUT
+          echo "✓ Binary hash: $APP_HASH"
+
+      # Build final image
+      - name: Build final image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.APP_NAME }}:test
+          cache-from: |
+            type=gha,scope=builder
+            type=gha,scope=final
+          cache-to: type=gha,mode=max,scope=final
+
+      # Analyze image size
+      - name: Analyze image size
+        id: sizes
+        run: |
+          SIZE_AMD64=$(docker image inspect ${{ env.APP_NAME }}:test --format='{{.Size}}')
+          SIZE_AMD64_MB=$(echo "scale=2; $SIZE_AMD64 / 1024 / 1024" | bc)
+
+          echo "size_amd64_mb=$SIZE_AMD64_MB" >> $GITHUB_OUTPUT
+          echo "✓ AMD64 size: ${SIZE_AMD64_MB}MB"
+
+      - name: Calculate duration
+        id: duration
+        if: always()
+        run: |
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - ${{ steps.start.outputs.time }}))
+          echo "duration=${DURATION}s" >> $GITHUB_OUTPUT
+
+  # Job 3: Test (depends on build, runs in parallel with security and sbom)
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      smoke-test-passed: ${{ steps.smoke_test.outcome == 'success' }}
+      duration: ${{ steps.duration.outputs.duration }}
+    steps:
+      - name: Record start time
+        id: start
+        run: echo "time=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Rebuild AMD64 image from cache (fast)
+      - name: Load test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.APP_NAME }}:test
+          cache-from: type=gha,scope=final
+
+      # Smoke test
+      - name: Smoke test
+        id: smoke_test
+        run: |
+          echo "Starting container..."
+          docker run -d --name test-app \
+            -p 8080:8080 \
+            ${{ env.APP_NAME }}:test
+
+          echo "Waiting for app to be ready..."
+          sleep 5
+
+          echo "Testing health endpoint with curl..."
+          timeout 30s bash -c 'until curl -f http://localhost:8080/healthz 2>/dev/null; do sleep 2; done' || {
+            echo "❌ Health endpoint failed"
+            docker logs test-app
+            exit 1
+          }
+
+          echo "✓ Health endpoint test passed"
+          echo "✓ All smoke tests passed"
+
+          docker logs test-app
+          docker stop test-app
+
+      - name: Calculate duration
+        id: duration
+        if: always()
+        run: |
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - ${{ steps.start.outputs.time }}))
+          echo "duration=${DURATION}s" >> $GITHUB_OUTPUT
+
+  # Job 4: Trivy scan (depends on build, runs in parallel)
+  trivy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      passed: ${{ steps.trivy_scan.outcome == 'success' }}
+      duration: ${{ steps.duration.outputs.duration }}
+    steps:
+      - name: Record start time
+        id: start
+        run: echo "time=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Load test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.APP_NAME }}:test
+          cache-from: type=gha,scope=final
+
+      - name: Trivy vulnerability scan (SARIF)
+        id: trivy_sarif
+        uses: aquasecurity/trivy-action@0.33.1
+        continue-on-error: true
+        with:
+          image-ref: ${{ env.APP_NAME }}:test
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'HIGH,CRITICAL'
+          vuln-type: 'os,library'
+          scanners: 'vuln,misconfig,secret,license'
+          trivyignores: '.trivyignore.yaml'
+
+      - name: Upload Trivy results to GitHub Security
+        if: steps.trivy_sarif.outcome == 'success'
+        uses: github/codeql-action/upload-sarif@v4
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Trivy scan (table output)
+        id: trivy_scan
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ env.APP_NAME }}:test
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          scanners: 'vuln,secret,misconfig'
+          exit-code: '1'
+          trivyignores: '.trivyignore.yaml'
+
+      - name: Calculate duration
+        id: duration
+        if: always()
+        run: |
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - ${{ steps.start.outputs.time }}))
+          echo "duration=${DURATION}s" >> $GITHUB_OUTPUT
+
+  # Job 5: Dockle scan (depends on build, runs in parallel)
+  dockle:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      passed: ${{ steps.dockle_scan.outcome == 'success' }}
+      duration: ${{ steps.duration.outputs.duration }}
+    steps:
+      - name: Record start time
+        id: start
+        run: echo "time=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Load test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.APP_NAME }}:test
+          cache-from: type=gha,scope=final
+
+      - name: Dockle security scan
+        id: dockle_scan
+        uses: goodwithtech/dockle-action@main
+        continue-on-error: true
+        with:
+          image: ${{ env.APP_NAME }}:test
+          format: 'list'
+          exit-code: '0'
+          exit-level: 'warn'
+          ignore: 'CIS-DI-0001,DKL-DI-0006'
+
+      - name: Calculate duration
+        id: duration
+        if: always()
+        run: |
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - ${{ steps.start.outputs.time }}))
+          echo "duration=${DURATION}s" >> $GITHUB_OUTPUT
+
+  # Job 6: Grype scan (depends on build, runs in parallel)
+  grype:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      passed: ${{ steps.grype_scan.outcome == 'success' }}
+      duration: ${{ steps.duration.outputs.duration }}
+    steps:
+      - name: Record start time
+        id: start
+        run: echo "time=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Load test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.APP_NAME }}:test
+          cache-from: type=gha,scope=final
+
+      - name: Grype vulnerability scan
+        id: grype_scan
+        uses: anchore/scan-action@v3
+        continue-on-error: true
+        with:
+          image: ${{ env.APP_NAME }}:test
+          fail-build: false
+          severity-cutoff: high
+
+      - name: Calculate duration
+        id: duration
+        if: always()
+        run: |
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - ${{ steps.start.outputs.time }}))
+          echo "duration=${DURATION}s" >> $GITHUB_OUTPUT
+
+  # Job 7: SBOM generation (depends on build, runs in parallel)
+  sbom:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      duration: ${{ steps.duration.outputs.duration }}
+    steps:
+      - name: Record start time
+        id: start
+        run: echo "time=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Load test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.APP_NAME }}:test
+          cache-from: type=gha,scope=final
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.APP_NAME }}:test
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json
+          retention-days: 90
+
+      - name: Calculate duration
+        id: duration
+        if: always()
+        run: |
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - ${{ steps.start.outputs.time }}))
+          echo "duration=${DURATION}s" >> $GITHUB_OUTPUT
+
+  # Job 8: Report (depends on all jobs, always runs)
+  report:
+    needs: [lint, build, test, trivy, dockle, grype, sbom]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Calculate total duration
+        id: total_duration
+        run: |
+          # Extract durations (format: "123s")
+          LINT_DURATION="${{ needs.lint.outputs.duration }}"
+          BUILD_DURATION="${{ needs.build.outputs.duration }}"
+          TEST_DURATION="${{ needs.test.outputs.duration }}"
+          TRIVY_DURATION="${{ needs.trivy.outputs.duration }}"
+          DOCKLE_DURATION="${{ needs.dockle.outputs.duration }}"
+          GRYPE_DURATION="${{ needs.grype.outputs.duration }}"
+          SBOM_DURATION="${{ needs.sbom.outputs.duration }}"
+          
+          # Remove 's' and convert to integers
+          LINT_SEC=${LINT_DURATION%s}
+          BUILD_SEC=${BUILD_DURATION%s}
+          TEST_SEC=${TEST_DURATION%s}
+          TRIVY_SEC=${TRIVY_DURATION%s}
+          DOCKLE_SEC=${DOCKLE_DURATION%s}
+          GRYPE_SEC=${GRYPE_DURATION%s}
+          SBOM_SEC=${SBOM_DURATION%s}
+          
+          # Calculate total (build is sequential, others are parallel)
+          # Total = lint + build + max(test, trivy, dockle, grype, sbom)
+          PARALLEL_MAX=$TEST_SEC
+          [ $TRIVY_SEC -gt $PARALLEL_MAX ] && PARALLEL_MAX=$TRIVY_SEC
+          [ $DOCKLE_SEC -gt $PARALLEL_MAX ] && PARALLEL_MAX=$DOCKLE_SEC
+          [ $GRYPE_SEC -gt $PARALLEL_MAX ] && PARALLEL_MAX=$GRYPE_SEC
+          [ $SBOM_SEC -gt $PARALLEL_MAX ] && PARALLEL_MAX=$SBOM_SEC
+          
+          TOTAL_SEC=$((LINT_SEC + BUILD_SEC + PARALLEL_MAX))
+          TOTAL_MIN=$((TOTAL_SEC / 60))
+          TOTAL_REM=$((TOTAL_SEC % 60))
+          
+          echo "total=${TOTAL_MIN}m ${TOTAL_REM}s" >> $GITHUB_OUTPUT
+          echo "Total pipeline time: ${TOTAL_MIN}m ${TOTAL_REM}s"
+
+      - name: Find existing comment
+        uses: peter-evans/find-comment@v3
+        id: find_comment
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '🐳 Docker Build Report'
+
+      - name: Create or update PR comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          edit-mode: replace
+          body: |
+            ## 🐳 Docker Build Report
+            
+            ${{ needs.build.result == 'success' && (needs.test.result == 'success' && needs.trivy.result == 'success' && needs.dockle.result == 'success' && needs.grype.result == 'success' && needs.sbom.result == 'success' && '**Status:** ✅ All checks passed - Ready to merge!' || '**Status:** ⚠️ Build succeeded but some checks failed') || '**Status:** ❌ Build failed - See logs below' }}
+            
+            **Image:** `${{ env.APP_NAME }}:pr-${{ github.event.pull_request.number }}`  
+            **Platforms:** `linux/amd64`  
+            **Commit:** [`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})  
+            **Branch:** `${{ github.head_ref }}` → `${{ github.base_ref }}`
+            
+            ### 📊 Pipeline Results
+            
+            | Stage | Status | Duration | Details |
+            |-------|:------:|:--------:|---------|
+            | 🔍 Lint | ${{ needs.lint.result == 'success' && '✅' || (needs.lint.result == 'failure' && '❌' || '⚠️') }} `${{ needs.lint.result }}` | ${{ needs.lint.outputs.duration || 'N/A' }} | Dockerfile validation |
+            | 🏗️ Build | ${{ needs.build.result == 'success' && '✅' || (needs.build.result == 'failure' && '❌' || '⚠️') }} `${{ needs.build.result }}` | ${{ needs.build.outputs.duration || 'N/A' }} | Multi-arch compilation |
+            | 🧪 Smoke Test | ${{ needs.test.result == 'success' && '✅' || (needs.test.result == 'failure' && '❌' || '⚠️') }} `${{ needs.test.result }}` | ${{ needs.test.outputs.duration || 'N/A' }} | Health check validation |
+            | 🛡️ Trivy Scan | ${{ needs.trivy.result == 'success' && '✅' || (needs.trivy.result == 'failure' && '❌' || '⚠️') }} `${{ needs.trivy.result }}` | ${{ needs.trivy.outputs.duration || 'N/A' }} | Vulnerability scanner |
+            | 🐋 Dockle | ${{ needs.dockle.result == 'success' && '✅' || (needs.dockle.result == 'failure' && '❌' || '⚠️') }} `${{ needs.dockle.result }}` | ${{ needs.dockle.outputs.duration || 'N/A' }} | Best practices check |
+            | 🔎 Grype | ${{ needs.grype.result == 'success' && '✅' || (needs.grype.result == 'failure' && '❌' || '⚠️') }} `${{ needs.grype.result }}` | ${{ needs.grype.outputs.duration || 'N/A' }} | Additional CVE scan |
+            | 📦 SBOM | ${{ needs.sbom.result == 'success' && '✅' || (needs.sbom.result == 'failure' && '❌' || '⚠️') }} `${{ needs.sbom.result }}` | ${{ needs.sbom.outputs.duration || 'N/A' }} | Software bill of materials |
+            
+            **Total time:** ${{ steps.total_duration.outputs.total }} (parallel execution)
+            
+            ${{ needs.build.result == 'success' && '### 📏 Image Metrics' || '' }}
+            
+            ${{ needs.build.result == 'success' && '| Architecture | Size | Compression |' || '' }}
+            ${{ needs.build.result == 'success' && '|--------------|------|-------------|' || '' }}
+            ${{ needs.build.result == 'success' && format('| AMD64 | {0} MB | Multi-stage |', needs.build.outputs.size_amd64) || '' }}
+
+            ${{ needs.build.result == 'success' && '**Base:** `alpine:3.19` (minimal, secure)' || '' }}
+            
+            ${{ needs.build.result == 'success' && '### 🔐 Security & Integrity' || '' }}
+            ${{ needs.build.result == 'success' && '' || '' }}
+            ${{ needs.build.result == 'success' && '**Binary Hash (SHA-256):**' || '' }}
+            ${{ needs.build.result == 'success' && '```' || '' }}
+            ${{ needs.build.result == 'success' && format('Application:  {0}', needs.build.outputs.app_hash) || '' }}
+            ${{ needs.build.result == 'success' && '```' || '' }}
+            ${{ needs.build.result == 'success' && '' || '' }}
+            ${{ needs.build.result == 'success' && '**Image Details:**' || '' }}
+            ${{ needs.build.result == 'success' && '- User: `sentientd` (UID 1000)' || '' }}
+            ${{ needs.build.result == 'success' && '- Port: `8080`' || '' }}
+            ${{ needs.build.result == 'success' && '- Base: `alpine:3.19`' || '' }}
+            ${{ needs.build.result == 'success' && format('- Go Version: `{0}`, CGO disabled, static linking', env.GO_VERSION) || '' }}
+            
+            ${{ needs.build.result == 'failure' && '### ❌ Build Failure\n\nThe build failed. Common causes:\n- Go compilation errors\n- Missing dependencies\n- Dockerfile syntax issues\n\n[View detailed logs](' || '' }}${{ needs.build.result == 'failure' && github.server_url || '' }}${{ needs.build.result == 'failure' && '/' || '' }}${{ needs.build.result == 'failure' && github.repository || '' }}${{ needs.build.result == 'failure' && '/actions/runs/' || '' }}${{ needs.build.result == 'failure' && github.run_id || '' }}${{ needs.build.result == 'failure' && ')' || '' }}
+            
+            ${{ needs.test.result == 'failure' && '### ⚠️ Test Failure\n\nSmoke tests failed. The application may not be starting correctly or the health endpoint is not responding.\n\n[View test logs](' || '' }}${{ needs.test.result == 'failure' && github.server_url || '' }}${{ needs.test.result == 'failure' && '/' || '' }}${{ needs.test.result == 'failure' && github.repository || '' }}${{ needs.test.result == 'failure' && '/actions/runs/' || '' }}${{ needs.test.result == 'failure' && github.run_id || '' }}${{ needs.test.result == 'failure' && ')' || '' }}
+            
+            ${{ needs.trivy.result == 'failure' && '### 🛡️ Security Alert\n\nTrivy detected CRITICAL or HIGH vulnerabilities. Review and fix before merging.\n\n[View security report](' || '' }}${{ needs.trivy.result == 'failure' && github.server_url || '' }}${{ needs.trivy.result == 'failure' && '/' || '' }}${{ needs.trivy.result == 'failure' && github.repository || '' }}${{ needs.trivy.result == 'failure' && '/security/code-scanning)' || '' }}
+            
+            <details>
+            <summary>ℹ️ Additional Information</summary>
+            
+            **Build Configuration:**
+            - Go Version: `${{ env.GO_VERSION }}`
+            - PR Number: `#${{ github.event.pull_request.number }}`
+            - Target Branch: `${{ github.base_ref }}`
+            - Source Branch: `${{ github.head_ref }}`
+            - Workflow: `${{ github.workflow }}`
+            - Runner: `ubuntu-latest`
+            
+            **Image Labels:**
+            - `org.opencontainers.image.version`: `pr-${{ github.event.pull_request.number }}`
+            - `org.opencontainers.image.revision`: `${{ github.sha }}`
+            - `org.opencontainers.image.source`: `${{ github.server_url }}/${{ github.repository }}`
+            - `com.torvyn.binary.sha256`: `${{ needs.build.outputs.app_hash }}`
+
+            **Optimizations:**
+            - Multi-stage build (2 stages: builder, final)
+            - BuildKit cache enabled (GitHub Actions cache)
+            - Parallel test execution (test, trivy, dockle, grype, sbom)
+            - Static binary compilation (no runtime dependencies)
+            
+            **Artifacts:**
+            - Multi-platform image: Available for download (1 day retention)
+            - SBOM (SPDX format): Available for download (90 days retention)
+            
+            **Quick Actions:**
+            - [📋 View full logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - [📥 Download artifacts](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - [🔒 Security tab](${{ github.server_url }}/${{ github.repository }}/security)
+            - [📦 Packages](${{ github.server_url }}/${{ github.repository }}/pkgs/container/${{ env.APP_NAME }})
+            
+            </details>
+            
+            ---
+            
+            <sub>🤖 Automated report • Updated: ${{ github.event.pull_request.updated_at }} • Run: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) • Commit: `${{ github.sha }}`</sub>

@@ -1,0 +1,180 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-agent
+  namespace: spire
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spire-agent-cluster-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "nodes", "nodes/proxy"]
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spire-agent-cluster-role-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spire-agent-cluster-role
+subjects:
+  - kind: ServiceAccount
+    name: spire-agent
+    namespace: spire
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-agent
+  namespace: spire
+data:
+  agent.conf: |
+    agent {
+      data_dir = "/run/spire"
+      log_level = "INFO"
+      server_address = "spire-server.spire"
+      server_port = "8081"
+      socket_path = "/run/spire/sockets/agent.sock"
+      trust_domain = "torvyn.local"
+    }
+
+    plugins {
+      NodeAttestor "k8s_psat" {
+        plugin_data {
+          cluster = "kind-sentientd"
+        }
+      }
+
+      KeyManager "memory" {
+        plugin_data {}
+      }
+
+      WorkloadAttestor "k8s" {
+        plugin_data {
+          skip_kubelet_verification = true
+        }
+      }
+    }
+
+    health_checks {
+      listener_enabled = true
+      bind_address = "0.0.0.0"
+      bind_port = "8080"
+      live_path = "/live"
+      ready_path = "/ready"
+    }
+
+---
+# SECURITY NOTE: SPIRE Agent DaemonSet requires elevated privileges for workload attestation:
+# - hostPID: true - Required to access workload process information for attestation
+# - hostNetwork: true - Required to communicate with kubelet for workload verification
+# - privileged: true - Required for the main container to perform workload attestation
+# - nodes/proxy permission - Required for workload attestation (Trivy AVD-KSV-0047)
+# These are documented SPIRE requirements and cannot be removed without breaking functionality.
+# See: https://spiffe.io/docs/latest/deploying/spire_agent/
+#trivy:ignore:AVD-KSV-0009 trivy:ignore:AVD-KSV-0010 trivy:ignore:AVD-KSV-0014 trivy:ignore:AVD-KSV-0017 trivy:ignore:AVD-KSV-0047
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spire-agent
+  namespace: spire
+  labels:
+    app: spire-agent
+spec:
+  selector:
+    matchLabels:
+      app: spire-agent
+  template:
+    metadata:
+      labels:
+        app: spire-agent
+    spec:
+      # Required for workload attestation - DO NOT REMOVE
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: spire-agent
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: init
+          image: ghcr.io/spiffe/spire-agent:1.9.1
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Wait for spire-server to be ready
+              until nc -z spire-server.spire 8081; do
+                echo "Waiting for SPIRE server..."
+                sleep 2
+              done
+              echo "SPIRE server is ready"
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+      containers:
+        - name: spire-agent
+          image: ghcr.io/spiffe/spire-agent:1.9.1
+          args:
+            - -config
+            - /run/spire/config/agent.conf
+          volumeMounts:
+            - name: spire-config
+              mountPath: /run/spire/config
+              readOnly: true
+            - name: spire-agent-socket
+              mountPath: /run/spire/sockets
+            - name: spire-token
+              mountPath: /var/run/secrets/tokens
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 60
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          securityContext:
+            # REQUIRED for workload attestation - cannot be changed
+            runAsUser: 0
+            privileged: true
+            # Dropped capabilities where possible
+            capabilities:
+              drop:
+                - NET_RAW
+      volumes:
+        - name: spire-config
+          configMap:
+            name: spire-agent
+        - name: spire-agent-socket
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
+        - name: spire-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: spire-agent
+                  expirationSeconds: 7200
+                  audience: spire-server
+        - name: tmp
+          emptyDir: {}

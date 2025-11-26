@@ -1,0 +1,161 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nats
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nats
+  namespace: nats
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-config
+  namespace: nats
+data:
+  nats.conf: |
+    # NATS Server Configuration
+    server_name: nats-jetstream
+
+    # Client port
+    port: 4222
+
+    # HTTP monitoring port
+    http_port: 8222
+
+    # JetStream configuration
+    jetstream {
+      store_dir: /data/jetstream
+      max_memory_store: 1Gi
+      max_file_store: 10Gi
+    }
+
+    # Logging
+    log_file: "/dev/stdout"
+    logtime: true
+    debug: false
+    trace: false
+
+    # Limits
+    max_payload: 8MB
+    max_connections: 100
+    max_subscriptions: 1000
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nats
+  namespace: nats
+  labels:
+    app: nats
+spec:
+  type: ClusterIP
+  ports:
+    - name: client
+      port: 4222
+      targetPort: 4222
+      protocol: TCP
+    - name: monitoring
+      port: 8222
+      targetPort: 8222
+      protocol: TCP
+  selector:
+    app: nats
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nats
+  namespace: nats
+  labels:
+    app: nats
+spec:
+  serviceName: nats
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nats
+  template:
+    metadata:
+      labels:
+        app: nats
+    spec:
+      serviceAccountName: nats
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nats
+          image: nats:2.10.24-alpine
+          args:
+            - -c
+            - /etc/nats/nats.conf
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitoring
+              containerPort: 8222
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nats
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+      volumes:
+        - name: config
+          configMap:
+            name: nats-config
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
