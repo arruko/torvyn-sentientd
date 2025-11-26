@@ -19,7 +19,7 @@ concurrency:
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
   GO_VERSION: '1.25.4'
-  APP_NAME: 'torvyn-sentientd'
+  APP_NAME: 'sentientd'
   PLATFORMS: 'linux/amd64'
 
 jobs:

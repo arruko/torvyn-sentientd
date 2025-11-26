@@ -16,7 +16,7 @@ concurrency:
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
   GO_VERSION: '1.25.4'
-  APP_NAME: 'torvyn-sentientd'
+  APP_NAME: 'sentientd'
 
 jobs:
   # Job 1: Lint (fail fast - no dependencies)
@@ -92,11 +92,11 @@ jobs:
         run: |
           # Extract binary
           docker create --name temp-build ${{ env.APP_NAME }}:builder
-          docker cp temp-build:/build/sentientd /tmp/sentientd
+          docker cp temp-build:/build/${{ env.APP_NAME }} /tmp/${{ env.APP_NAME }}
           docker rm temp-build
 
           # Calculate hash
-          APP_HASH=$(sha256sum /tmp/sentientd | awk '{print $1}')
+          APP_HASH=$(sha256sum /tmp/${{ env.APP_NAME }} | awk '{print $1}')
           echo "app_hash=$APP_HASH" >> $GITHUB_OUTPUT
           echo "✓ Binary hash: $APP_HASH"
 
