@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sentientd
+  namespace: sentientd
+  labels:
+    app.kubernetes.io/name: sentientd
+    app.kubernetes.io/component: incident-management
+rules:
+  # Read ServiceGraph CRD for topology context
+  - apiGroups: ["torvyn.io"]
+    resources: ["servicegraphs"]
+    verbs: ["get", "list", "watch"]
+
+  # Create and manage Argo Workflows
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows"]
+    verbs: ["create", "get", "list", "watch", "update", "patch"]
+
+  # Optional: Read pods and events for debugging
+  - apiGroups: [""]
+    resources: ["pods", "events"]
+    verbs: ["get", "list", "watch"]

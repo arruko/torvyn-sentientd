@@ -1,0 +1,139 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentientd
+  namespace: sentientd
+  labels:
+    app.kubernetes.io/name: sentientd
+    app.kubernetes.io/component: incident-management
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sentientd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sentientd
+        app.kubernetes.io/component: incident-management
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: sentientd
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sentientd
+          image: ghcr.io/arruko/sentientd:v0.0.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            # Core configuration
+            - name: SENTIENTD_LISTEN_ADDR
+              value: ":8080"
+            - name: SENTIENTD_SERVICE_NAME
+              value: "sentientd"
+            - name: SENTIENTD_ENVIRONMENT
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+
+            # Correlation windows
+            - name: SENTIENTD_INITIAL_WINDOW
+              value: "30s"
+            - name: SENTIENTD_EXPANSION_WINDOW
+              value: "5m"
+
+            # Integration endpoints
+            - name: SENTIENTD_KAGENT_URL
+              value: "http://kagent.sentientd.svc.cluster.local:8080"
+            - name: SENTIENTD_ARGO_NAMESPACE
+              value: "argo"
+
+            # Database configuration (from secret)
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: sentientd-secrets
+                  key: DATABASE_URL
+
+            # GitHub token (from secret)
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: sentientd-secrets
+                  key: GITHUB_TOKEN
+                  optional: true
+
+            # Slack webhook (from secret)
+            - name: SENTIENTD_SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: sentientd-secrets
+                  key: SLACK_WEBHOOK_URL
+                  optional: true
+
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+            successThreshold: 1
+
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+            successThreshold: 1
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop:
+                - ALL
+
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+      terminationGracePeriodSeconds: 30

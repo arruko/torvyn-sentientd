@@ -1,0 +1,90 @@
+misconfigurations:
+
+  ##########################################################################
+  # SPIRE AGENT (DaemonSet)
+  # Privileged system workload required for workload/node attestation.
+  # These findings are expected and safe to ignore. Do not modify.
+  ##########################################################################
+
+  # hostNetwork / hostPID / privileged / rootFS write / capabilities / hostPaths
+  - id: AVD-KSV-0009
+    paths: [deploy/spire/spire-agent.yaml]
+  - id: AVD-KSV-0010
+    paths: [deploy/spire/spire-agent.yaml]
+  - id: AVD-KSV-0014
+    paths: [deploy/spire/spire-agent.yaml]
+  - id: AVD-KSV-0017
+    paths: [deploy/spire/spire-agent.yaml]
+
+  # privilege escalation + root execution
+  - id: AVD-KSV-0001
+    paths: [deploy/spire/spire-agent.yaml]
+  - id: AVD-KSV-0012
+    paths: [deploy/spire/spire-agent.yaml]
+  - id: AVD-KSV-0020
+    paths: [deploy/spire/spire-agent.yaml]
+  - id: AVD-KSV-0021
+    paths: [deploy/spire/spire-agent.yaml]
+  - id: AVD-KSV-0105
+    paths: [deploy/spire/spire-agent.yaml]
+
+  # hostPath volumes
+  - id: AVD-KSV-0023
+    paths: [deploy/spire/spire-agent.yaml]
+
+  # capabilities must not be dropped in SPIRE
+  - id: AVD-KSV-0003
+    paths: [deploy/spire/spire-agent.yaml]
+  - id: AVD-KSV-0106
+    paths: [deploy/spire/spire-agent.yaml]
+
+  # resource limits/requests not enforced in upstream manifests
+  - id: AVD-KSV-0011
+    paths: [deploy/spire/spire-agent.yaml]
+  - id: AVD-KSV-0015
+    paths: [deploy/spire/spire-agent.yaml]
+  - id: AVD-KSV-0016
+    paths: [deploy/spire/spire-agent.yaml]
+  - id: AVD-KSV-0018
+    paths: [deploy/spire/spire-agent.yaml]
+
+  # GHCR registry is trusted (official SPIRE images)
+  - id: AVD-KSV-0125
+    paths: [deploy/spire/spire-agent.yaml]
+
+  # Required for SPIRE node attestation (k8s_sat / k8s_psat)
+  - id: AVD-KSV-0047
+    paths: [deploy/spire/spire-agent.yaml]
+
+  ##########################################################################
+  # SPIRE SERVER (StatefulSet)
+  # Same rationale as Agent: privileged identity infrastructure component.
+  ##########################################################################
+
+  # root user / missing limits / registry
+  - id: AVD-KSV-0011
+    paths: [deploy/spire/spire-server.yaml]
+  - id: AVD-KSV-0015
+    paths: [deploy/spire/spire-server.yaml]
+  - id: AVD-KSV-0016
+    paths: [deploy/spire/spire-server.yaml]
+  - id: AVD-KSV-0018
+    paths: [deploy/spire/spire-server.yaml]
+  - id: AVD-KSV-0020
+    paths: [deploy/spire/spire-server.yaml]
+  - id: AVD-KSV-0021
+    paths: [deploy/spire/spire-server.yaml]
+  - id: AVD-KSV-0125
+    paths: [deploy/spire/spire-server.yaml]
+
+  ##########################################################################
+  # SENTIEND (Deployment/Workers)
+  ##########################################################################
+
+  # Worker container (one-shot). HEALTHCHECK not applicable.
+  - id: AVD-DS-0026
+    paths: [cmd/dag-runner/Dockerfile]
+
+  # GHCR registry for sentientd is trusted
+  - id: AVD-KSV-0125
+    paths: [deploy/kubernetes/deployment.yaml]

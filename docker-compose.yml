@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sentientd-postgres
+    environment:
+      POSTGRES_USER: sentientd
+      POSTGRES_PASSWORD: sentientd
+      POSTGRES_DB: sentientd
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentientd"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Mock kagent for local testing (optional)
+  # Uncomment when you need to test end-to-end flows
+  # mock-kagent:
+  #   image: hashicorp/http-echo
+  #   container_name: mock-kagent
+  #   ports:
+  #     - "8081:5678"
+  #   command:
+  #     - "-text={\"status\":\"ok\",\"rca\":\"Mock RCA\",\"dag\":{\"tasks\":[]}}"
+
+volumes:
+  postgres_data:

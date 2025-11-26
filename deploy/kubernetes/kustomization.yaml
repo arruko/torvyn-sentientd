@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: sentientd
+
+commonLabels:
+  app.kubernetes.io/name: sentientd
+  app.kubernetes.io/part-of: torvyn
+
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - role.yaml
+  - rolebinding.yaml
+  - secret.yaml
+  - deployment.yaml
+  - service.yaml
+
+images:
+  - name: sentientd
+    newName: ghcr.io/arruko/sentientd  # TODO: Update with actual registry
+    newTag: latest
+
+configMapGenerator: []
+secretGenerator: []

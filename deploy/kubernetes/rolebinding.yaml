@@ -1,0 +1,16 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sentientd
+  namespace: sentientd
+  labels:
+    app.kubernetes.io/name: sentientd
+    app.kubernetes.io/component: incident-management
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sentientd
+subjects:
+  - kind: ServiceAccount
+    name: sentientd
+    namespace: sentientd
