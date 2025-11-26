@@ -31,7 +31,6 @@ jobs:
       digest: ${{ steps.build.outputs.digest }}
       version: ${{ steps.vars.outputs.version }}
       app_hash: ${{ steps.hashes.outputs.app_hash }}
-      healthcheck_hash: ${{ steps.hashes.outputs.healthcheck_hash }}
       
     steps:
       - name: Checkout
@@ -103,24 +102,13 @@ jobs:
         run: |
           # Extract main binary
           docker create --name temp-build ${{ env.APP_NAME }}:build-stage
-          docker cp temp-build:/out/${{ env.APP_NAME }} /tmp/${{ env.APP_NAME }}
+          docker cp temp-build:/app/${{ env.APP_NAME }} /tmp/${{ env.APP_NAME }}
           docker rm temp-build
           
           # Calculate hash
           APP_HASH=$(sha256sum /tmp/${{ env.APP_NAME }} | awk '{print $1}')
           echo "app_hash=$APP_HASH" >> $GITHUB_OUTPUT
           echo "✓ Binary hash: $APP_HASH"
-          
-          # Extract healthcheck
-          docker create --name temp-healthcheck ${{ env.APP_NAME }}:healthcheck-stage
-          docker cp temp-healthcheck:/healthcheck/healthcheck /tmp/healthcheck
-          docker rm temp-healthcheck
-          
-          # Calculate hash
-          HEALTHCHECK_HASH=$(sha256sum /tmp/healthcheck | awk '{print $1}')
-          echo "healthcheck_hash=$HEALTHCHECK_HASH" >> $GITHUB_OUTPUT
-          echo "✓ Healthcheck hash: $HEALTHCHECK_HASH"
-
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -154,7 +142,6 @@ jobs:
             REPO_URL=${{ github.server_url }}/${{ github.repository }}
             BRANCH=${{ github.ref_name }}
             APP_HASH=${{ steps.hashes.outputs.app_hash }}
-            HEALTHCHECK_HASH=${{ steps.hashes.outputs.healthcheck_hash }}
           platforms: ${{ env.PLATFORMS }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -162,7 +149,6 @@ jobs:
           cache-from: |
             type=gha,scope=release-deps
             type=gha,scope=release-build
-            type=gha,scope=release-healthcheck
             type=gha,scope=release-amd64
           cache-to: |
             type=gha,mode=max,scope=release-deps
@@ -275,7 +261,6 @@ jobs:
           
           **Checksums:**
           - Binary: `${{ steps.hashes.outputs.app_hash }}`
-          - Healthcheck: `${{ steps.hashes.outputs.healthcheck_hash }}`
           - Image: `${{ steps.build.outputs.digest }}`
           
           ### 📋 Build Info
