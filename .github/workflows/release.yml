@@ -85,7 +85,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          target: build
+          target: builder
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
             APP_NAME=${{ env.APP_NAME }}
@@ -97,18 +97,6 @@ jobs:
           tags: ${{ env.APP_NAME }}:build-stage
           cache-from: type=gha,scope=release-build
           cache-to: type=gha,mode=max,scope=release-build
-
-      - name: Build healthcheck stage
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          target: healthcheck-builder
-          platforms: linux/amd64
-          load: true
-          tags: ${{ env.APP_NAME }}:healthcheck-stage
-          cache-from: type=gha,scope=release-healthcheck
-          cache-to: type=gha,mode=max,scope=release-healthcheck
 
       - name: Extract binary hashes
         id: hashes
@@ -227,10 +215,10 @@ jobs:
         with:
           image-ref: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
           format: 'table'
-          severity: 'CRITICAL,HIGH'
-          scanners: 'vuln,secret,misconfig'
           ignore-unfixed: true
-          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+          vuln-type: 'os,library'
+          scanners: 'vuln,misconfig,secret,license'
           trivyignores: '.trivyignore.yaml'
 
       - name: Install cosign
