@@ -14,7 +14,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o dag-runner ./cmd/dag-runner
 
 # Runtime stage
-FROM alpine:3.22
+FROM alpine:3.23
 
 # Install kubectl for kubectl tool support
 RUN apk add --no-cache ca-certificates kubectl
