@@ -8,8 +8,8 @@ require (
 	github.com/nats-io/nats.go v1.47.0
 	github.com/open-policy-agent/opa v1.10.1
 	github.com/spiffe/go-spiffe/v2 v2.6.0
-	k8s.io/apimachinery v0.34.2
-	k8s.io/client-go v0.34.2
+	k8s.io/apimachinery v0.34.3
+	k8s.io/client-go v0.34.3
 )
 
 require (
