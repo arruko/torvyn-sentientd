@@ -5,7 +5,7 @@ go 1.25.4
 require (
 	github.com/go-chi/chi/v5 v5.2.3
 	github.com/jackc/pgx/v5 v5.7.6
-	github.com/nats-io/nats.go v1.47.0
+	github.com/nats-io/nats.go v1.48.0
 	github.com/open-policy-agent/opa v1.10.1
 	github.com/spiffe/go-spiffe/v2 v2.6.0
 	k8s.io/apimachinery v0.34.2
