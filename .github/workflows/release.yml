@@ -181,7 +181,7 @@ jobs:
 
       # Security scanning
       - name: Trivy scan (SARIF)
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@0.34.0
         continue-on-error: true
         with:
           image-ref: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
@@ -197,7 +197,7 @@ jobs:
       # Security results are still available in the Trivy table output below
 
       - name: Trivy scan (fail on critical)
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@0.34.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
           format: 'table'
