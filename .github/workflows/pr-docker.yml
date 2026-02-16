@@ -229,7 +229,7 @@ jobs:
 
       - name: Trivy vulnerability scan (SARIF)
         id: trivy_sarif
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@0.34.0
         continue-on-error: true
         with:
           image-ref: ${{ env.APP_NAME }}:test
@@ -249,7 +249,7 @@ jobs:
 
       - name: Trivy scan (table output)
         id: trivy_scan
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@0.34.0
         with:
           image-ref: ${{ env.APP_NAME }}:test
           format: 'table'
